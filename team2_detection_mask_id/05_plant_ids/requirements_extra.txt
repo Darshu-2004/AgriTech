@@ -1,0 +1,8 @@
+geopandas
+shapely
+hdbscan
+scikit-learn
+rasterio
+numpy
+fiona
+scipy

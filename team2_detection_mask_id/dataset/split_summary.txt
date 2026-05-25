@@ -1,0 +1,7 @@
+YOLOv8 dataset preparation summary
+source_images: 242
+kept_labeled_pairs: 194
+removed_unlabeled_images: 48
+train: 155
+val: 19
+test: 20

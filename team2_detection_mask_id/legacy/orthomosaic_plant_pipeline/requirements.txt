@@ -1,0 +1,7 @@
+numpy
+opencv-python
+rasterio
+shapely
+scikit-learn
+hdbscan
+ultralytics

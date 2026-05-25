@@ -1,0 +1,8 @@
+numpy
+opencv-python
+rasterio
+scipy
+scikit-learn
+shapely
+torch
+ultralytics

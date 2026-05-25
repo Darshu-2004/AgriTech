@@ -1,0 +1,1 @@
+﻿{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"plant_id":"PLT-S01-R001-C001-ABC123","sector_id":1,"sector_label":"S01","row_index":1,"col_index":1,"confidence":0.87},"geometry":{"type":"Point","coordinates":[805000.1,325000.2]}}]}

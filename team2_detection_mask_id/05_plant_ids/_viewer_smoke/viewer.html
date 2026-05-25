@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plant ID Viewer</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #0b0b0b;
+      color: #fff;
+      font: 12px/1.4 sans-serif;
+    }
+    #map {
+      position: absolute;
+      inset: 0;
+      background: #101010;
+    }
+    .panel {
+      position: absolute;
+      background: rgba(15, 15, 15, 0.85);
+      color: #fff;
+      padding: 12px;
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+      z-index: 2;
+      backdrop-filter: blur(6px);
+    }
+    #controls {
+      top: 12px;
+      left: 12px;
+      width: 270px;
+    }
+    #stats {
+      top: 12px;
+      right: 12px;
+      width: 280px;
+      max-height: calc(100vh - 24px);
+      overflow: auto;
+    }
+    #details {
+      top: 140px;
+      right: 12px;
+      width: 280px;
+      display: none;
+    }
+    .panel h3 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .row input[type="text"] {
+      flex: 1;
+      min-width: 0;
+      padding: 7px 8px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.05);
+      color: #fff;
+      border-radius: 6px;
+    }
+    .row button {
+      padding: 7px 10px;
+      border: 0;
+      border-radius: 6px;
+      background: #2e2e2e;
+      color: #fff;
+      cursor: pointer;
+    }
+    label.toggle {
+      display: block;
+      margin: 6px 0;
+    }
+    .stat-line {
+      margin: 4px 0;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 52px 1fr 38px;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+    }
+    .bar {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 6px 8px;
+    }
+    .hint {
+      opacity: 0.75;
+      font-size: 11px;
+      margin-top: 8px;
+    }
+    .collapse-btn {
+      float: right;
+      margin-top: -2px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+      padding: 2px 6px;
+    }
+    .tooltip {
+      position: absolute;
+      z-index: 3;
+      pointer-events: none;
+      background: rgba(15,15,15,0.92);
+      color: #fff;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      display: none;
+      white-space: nowrap;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="tooltip" class="tooltip"></div>
+
+  <div id="controls" class="panel">
+    <h3>Layers & Search</h3>
+    <div class="row">
+      <input id="searchInput" type="text" placeholder="Search plant_id, sector, row..." />
+      <button id="clearSearch">Clear</button>
+    </div>
+    <label class="toggle"><input id="togglePlants" type="checkbox" checked /> Plants</label>
+    <label class="toggle"><input id="toggleSectors" type="checkbox" checked /> Sector boundaries</label>
+    <label class="toggle"><input id="toggleBoundary" type="checkbox" checked /> Farm boundary</label>
+    <label class="toggle"><input id="toggleExclusion" type="checkbox" checked /> Exclusion zones</label>
+    <div class="hint">Search filters visible plants by plant ID substring.</div>
+  </div>
+
+  <div id="stats" class="panel">
+    <button id="toggleStats" class="collapse-btn">Hide</button>
+    <h3>Run Stats</h3>
+    <div id="statsBody"></div>
+  </div>
+
+  <div id="details" class="panel">
+    <h3>Selected Plant</h3>
+    <div id="detailsBody" class="detail-grid"></div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script>
+    const PLANTS_DATA = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"plant_id": "PLT-S01-R001-C001-ABC123", "sector_id": 1, "sector_label": "S01", "row_index": 1, "col_index": 1, "confidence": 0.87}, "geometry": {"type": "Point", "coordinates": [805000.1, 325000.2]}}]};
+    const SECTORS_DATA = {"type": "FeatureCollection", "features": []};
+    const SUMMARY_DATA = {"total_plants": 1, "plants_by_sector": {"S01": 1}, "noise_plants": 0, "run_timestamp": "2026-04-04T10:00:00"};
+    const BOUNDARY_DATA = null;
+    const EXCLUSION_DATA = null;
+    const SECTOR_COLORS = ["#4e9a8f", "#e07b39", "#6a5acd", "#c4a035", "#3a7abf", "#b85c8a", "#5a9e4a", "#888"];
+    const NOISE_COLOR = "#888";
+
+    const map = new maplibregl.Map({
+      container: "map",
+      style: {
+        version: 8,
+        sources: {
+          osm: {
+            type: "raster",
+            tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+            tileSize: 256,
+            attribution: "&copy; OpenStreetMap contributors"
+          }
+        },
+        layers: [
+          {
+            id: "osm",
+            type: "raster",
+            source: "osm"
+          }
+        ]
+      },
+      center: [0, 0],
+      zoom: 2
+    });
+
+    const tooltip = document.getElementById("tooltip");
+    const detailsPanel = document.getElementById("details");
+    const detailsBody = document.getElementById("detailsBody");
+    const statsPanel = document.getElementById("stats");
+    const statsBody = document.getElementById("statsBody");
+    const searchInput = document.getElementById("searchInput");
+    const clearSearch = document.getElementById("clearSearch");
+
+    let allPlantFeatures = PLANTS_DATA.features || [];
+    let selectedFeature = null;
+    let statsCollapsed = false;
+
+    function getSectorColor(sectorId) {
+      if (sectorId === -1) return NOISE_COLOR;
+      return SECTOR_COLORS[((sectorId % 8) + 8) % 8];
+    }
+
+    function featureMatchesSearch(feature, query) {
+      if (!query) return true;
+      const q = query.toLowerCase();
+      const p = feature.properties || {};
+      return [
+        p.plant_id,
+        p.sector_label,
+        p.row_index ? `R${String(p.row_index).padStart(3, "0")}` : "",
+        p.col_index ? `C${String(p.col_index).padStart(3, "0")}` : ""
+      ].join(" ").toLowerCase().includes(q);
+    }
+
+    function filterPlants(query) {
+      const filteredFeatures = allPlantFeatures.filter(feature => featureMatchesSearch(feature, query));
+      const filteredGeoJson = {
+        type: "FeatureCollection",
+        features: filteredFeatures
+      };
+      map.getSource("plants").setData(filteredGeoJson);
+
+      const visibleSectorIds = new Set(
+        filteredFeatures
+          .map(feature => Number(feature.properties?.sector_id ?? -1))
+          .filter(value => value !== -1)
+      );
+      const filteredSectors = {
+        type: "FeatureCollection",
+        features: (SECTORS_DATA.features || []).filter(feature =>
+          visibleSectorIds.has(Number(feature.properties?.sector_id ?? -1))
+        )
+      };
+      if (map.getSource("sectors")) {
+        map.getSource("sectors").setData(filteredSectors);
+      }
+
+      if (selectedFeature && !featureMatchesSearch(selectedFeature, query)) {
+        selectedFeature = null;
+        detailsPanel.style.display = "none";
+        map.getSource("selectedPlant").setData({ type: "FeatureCollection", features: [] });
+      }
+    }
+
+    function fitToPlants() {
+      const bounds = new maplibregl.LngLatBounds();
+      let count = 0;
+      for (const feature of allPlantFeatures) {
+        if (feature.geometry?.type === "Point") {
+          bounds.extend(feature.geometry.coordinates);
+          count += 1;
+        }
+      }
+      if (count > 0) {
+        map.fitBounds(bounds, { padding: 40, duration: 0 });
+      }
+    }
+
+    function showTooltip(event, feature) {
+      const p = feature.properties || {};
+      tooltip.innerHTML = `
+        <div><strong>Plant ID:</strong> ${p.plant_id ?? "N/A"}</div>
+        <div><strong>Sector:</strong> ${p.sector_label ?? "N/A"}</div>
+        <div><strong>Row / Col:</strong> R${String(p.row_index ?? 0).padStart(3, "0")} / C${String(p.col_index ?? 0).padStart(3, "0")}</div>
+        <div><strong>Confidence:</strong> ${p.confidence ?? "N/A"}</div>
+      `;
+      tooltip.style.display = "block";
+      tooltip.style.left = `${event.point.x + 14}px`;
+      tooltip.style.top = `${event.point.y + 14}px`;
+    }
+
+    function hideTooltip() {
+      tooltip.style.display = "none";
+    }
+
+    function showDetails(feature) {
+      const p = feature.properties || {};
+      const coords = feature.geometry?.coordinates || [null, null];
+      detailsBody.innerHTML = `
+        <div>Plant ID</div><div>${p.plant_id ?? "N/A"}</div>
+        <div>Sector</div><div>${p.sector_label ?? "N/A"}</div>
+        <div>Row / Col</div><div>R${String(p.row_index ?? 0).padStart(3, "0")} / C${String(p.col_index ?? 0).padStart(3, "0")}</div>
+        <div>Confidence</div><div>${p.confidence ?? "N/A"}</div>
+        <div>Geo X</div><div>${coords[0] == null ? "N/A" : Number(coords[0]).toFixed(6)}</div>
+        <div>Geo Y</div><div>${coords[1] == null ? "N/A" : Number(coords[1]).toFixed(6)}</div>
+      `;
+      detailsPanel.style.display = "block";
+      selectedFeature = feature;
+      map.getSource("selectedPlant").setData({
+        type: "FeatureCollection",
+        features: [feature]
+      });
+    }
+
+    function renderStats() {
+      const totalPlants = Number(SUMMARY_DATA.total_plants || allPlantFeatures.length || 0);
+      const noisePlants = Number(SUMMARY_DATA.noise_plants || 0);
+      const plantsBySector = SUMMARY_DATA.plants_by_sector || {};
+      const maxCount = Math.max(1, ...Object.values(plantsBySector).map(Number));
+      const runTimestamp = SUMMARY_DATA.run_timestamp || "N/A";
+
+      const bars = Object.entries(plantsBySector).sort((a, b) => a[0].localeCompare(b[0])).map(([sectorLabel, count]) => {
+        const sectorId = Number((sectorLabel || "S00").replace("S", "")) || 0;
+        const width = (Number(count) / maxCount) * 100;
+        return `
+          <div class="bar-row">
+            <div>${sectorLabel}</div>
+            <div class="bar"><div class="bar-fill" style="width:${width}%;background:${getSectorColor(sectorId)}"></div></div>
+            <div>${count}</div>
+          </div>
+        `;
+      }).join("");
+
+      statsBody.innerHTML = `
+        <div class="stat-line"><strong>Total plants detected:</strong> ${totalPlants}</div>
+        <div class="stat-line"><strong>Noise / unassigned:</strong> ${noisePlants}</div>
+        <div class="stat-line"><strong>Run timestamp:</strong> ${runTimestamp}</div>
+        <div style="margin-top:10px;"><strong>Plants per sector</strong></div>
+        ${bars || "<div class='hint'>No clustered sectors available.</div>"}
+      `;
+    }
+
+    function setLayerVisibility(layerId, visible) {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+      }
+    }
+
+    map.on("load", () => {
+      map.addSource("plants", {
+        type: "geojson",
+        data: PLANTS_DATA
+      });
+      map.addSource("selectedPlant", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] }
+      });
+      map.addSource("sectors", {
+        type: "geojson",
+        data: SECTORS_DATA
+      });
+
+      if (BOUNDARY_DATA) {
+        map.addSource("farmBoundary", {
+          type: "geojson",
+          data: BOUNDARY_DATA
+        });
+      }
+
+      if (EXCLUSION_DATA) {
+        map.addSource("exclusionZones", {
+          type: "geojson",
+          data: EXCLUSION_DATA
+        });
+      }
+
+      map.addLayer({
+        id: "sector-fill",
+        type: "fill",
+        source: "sectors",
+        paint: {
+          "fill-color": ["get", "color"],
+          "fill-opacity": 0.10
+        }
+      });
+      map.addLayer({
+        id: "sector-outline",
+        type: "line",
+        source: "sectors",
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": 2
+        }
+      });
+
+      if (BOUNDARY_DATA) {
+        map.addLayer({
+          id: "farm-boundary",
+          type: "line",
+          source: "farmBoundary",
+          paint: {
+            "line-color": "#ffffff",
+            "line-width": 2,
+            "line-dasharray": [2, 2]
+          }
+        });
+      }
+
+      if (EXCLUSION_DATA) {
+        map.addLayer({
+          id: "exclusion-fill",
+          type: "fill",
+          source: "exclusionZones",
+          paint: {
+            "fill-color": "#d44",
+            "fill-opacity": 0.18
+          }
+        });
+        map.addLayer({
+          id: "exclusion-outline",
+          type: "line",
+          source: "exclusionZones",
+          paint: {
+            "line-color": "#ff5555",
+            "line-width": 1.5,
+            "line-dasharray": [1, 1]
+          }
+        });
+      }
+
+      map.addLayer({
+        id: "plants",
+        type: "circle",
+        source: "plants",
+        paint: {
+          "circle-radius": [
+            "case",
+            ["==", ["get", "sector_id"], -1], 3, 5
+          ],
+          "circle-color": [
+            "case",
+            ["==", ["get", "sector_id"], -1], NOISE_COLOR,
+            ["match", ["get", "sector_id"],
+              0, SECTOR_COLORS[0],
+              1, SECTOR_COLORS[1],
+              2, SECTOR_COLORS[2],
+              3, SECTOR_COLORS[3],
+              4, SECTOR_COLORS[4],
+              5, SECTOR_COLORS[5],
+              6, SECTOR_COLORS[6],
+              7, SECTOR_COLORS[7],
+              SECTOR_COLORS[0]
+            ]
+          ],
+          "circle-stroke-color": "#101010",
+          "circle-stroke-width": 1
+        }
+      });
+
+      map.addLayer({
+        id: "selected-plant-ring",
+        type: "circle",
+        source: "selectedPlant",
+        paint: {
+          "circle-radius": 9,
+          "circle-color": "rgba(0,0,0,0)",
+          "circle-stroke-color": "#ffd84a",
+          "circle-stroke-width": 3
+        }
+      });
+
+      map.on("mousemove", "plants", (event) => {
+        const feature = event.features && event.features[0];
+        if (!feature) return;
+        map.getCanvas().style.cursor = "pointer";
+        showTooltip(event, feature);
+      });
+
+      map.on("mouseleave", "plants", () => {
+        map.getCanvas().style.cursor = "";
+        hideTooltip();
+      });
+
+      map.on("click", "plants", (event) => {
+        const feature = event.features && event.features[0];
+        if (!feature) return;
+        showDetails(feature);
+      });
+
+      document.getElementById("togglePlants").addEventListener("change", (event) => {
+        setLayerVisibility("plants", event.target.checked);
+        setLayerVisibility("selected-plant-ring", event.target.checked);
+      });
+      document.getElementById("toggleSectors").addEventListener("change", (event) => {
+        setLayerVisibility("sector-fill", event.target.checked);
+        setLayerVisibility("sector-outline", event.target.checked);
+      });
+      document.getElementById("toggleBoundary").addEventListener("change", (event) => {
+        setLayerVisibility("farm-boundary", event.target.checked);
+      });
+      document.getElementById("toggleExclusion").addEventListener("change", (event) => {
+        setLayerVisibility("exclusion-fill", event.target.checked);
+        setLayerVisibility("exclusion-outline", event.target.checked);
+      });
+
+      searchInput.addEventListener("input", () => {
+        filterPlants(searchInput.value.trim());
+      });
+      clearSearch.addEventListener("click", () => {
+        searchInput.value = "";
+        filterPlants("");
+      });
+
+      document.getElementById("toggleStats").addEventListener("click", () => {
+        statsCollapsed = !statsCollapsed;
+        statsBody.style.display = statsCollapsed ? "none" : "block";
+        document.getElementById("toggleStats").textContent = statsCollapsed ? "Show" : "Hide";
+      });
+
+      renderStats();
+      fitToPlants();
+    });
+  </script>
+</body>
+</html>

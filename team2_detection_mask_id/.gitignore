@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Model weights — tracked via Git LFS (see .gitattributes)
+# *.pt files are allowed; LFS handles the large binary storage
+*.onnx
+*.engine
+
+# Dataset images (large — use the labels + data.yaml only)
+dataset/images/
+drone_d_img/images/
+
+# Large input data
+ortho/
+
+# Training run outputs (large — weights, plots, etc.)
+runs/
+
+# Pipeline outputs (generated files)
+pipeline_outputs/
+predicted_test_images/
+boxed_predictions/
+outputs/
+
+# Temp review scripts
+_review_stage1.py
+
+# Intermediate files
+*.dat
+*.log
+*.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Claude Code session data
+.claude/
