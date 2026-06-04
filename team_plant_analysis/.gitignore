@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# input data (large files)
+data/
+*.tif
+*.tiff
+
+# generated outputs
+output/
+
+# env
+.env
+*.env
