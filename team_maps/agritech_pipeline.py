@@ -19,9 +19,9 @@ if not TOKEN:
 
 PROJECT_ID = 1
 
-DATASET_FOLDER = r"C:\Users\mukil\Desktop\fineaffle\DJI_202511131140_006_m3msaudagarT3flat"
+DATASET_FOLDER = r"C:\PATH\TO\DATASET"
 
-OUTPUT_FOLDER = r"C:\Users\mukil\Desktop\Final_Output"
+OUTPUT_FOLDER = r"C:\PATH\TO\OUTPUT"
 
 CAPTURE_LIMIT = 5      # Use None for full dataset
 
