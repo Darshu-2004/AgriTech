@@ -25,11 +25,14 @@ CREATE TABLE IF NOT EXISTS plants (
     area_px         NUMERIC,
     confidence      NUMERIC,
 
-    -- NDVI health
-    ndvi            NUMERIC(8, 6),          -- NDVI proxy value (-1 to +1)
-    health_status   TEXT CHECK (health_status IN ('healthy', 'moderate', 'diseased')),
-    health_color    TEXT,                   -- hex colour code
-    raster_crs      TEXT,                   -- e.g. EPSG:32647
+   -- Vegetation indices
+ndvi            NUMERIC(8, 6),
+osavi           NUMERIC(8, 6),
+gdvi            NUMERIC(8, 6),
+
+health_status   TEXT CHECK (health_status IN ('healthy', 'moderate', 'diseased')),
+health_color    TEXT,
+raster_crs      TEXT,
 
     -- geometry (WGS84 stored for compatibility; EPSG:4326)
     geom            GEOMETRY(Point, 4326),
@@ -49,6 +52,12 @@ CREATE INDEX IF NOT EXISTS idx_plants_health_status
 CREATE INDEX IF NOT EXISTS idx_plants_ndvi
     ON plants (ndvi);
 
+CREATE INDEX IF NOT EXISTS idx_plants_osavi
+    ON plants (osavi);
+
+CREATE INDEX IF NOT EXISTS idx_plants_gdvi
+    ON plants (gdvi);
+
 CREATE INDEX IF NOT EXISTS idx_plants_plant_id
     ON plants (plant_id);
 
@@ -58,9 +67,12 @@ SELECT
     health_status,
     health_color,
     COUNT(*)                           AS plant_count,
-    ROUND(AVG(ndvi)::NUMERIC, 4)       AS avg_ndvi,
-    ROUND(MIN(ndvi)::NUMERIC, 4)       AS min_ndvi,
-    ROUND(MAX(ndvi)::NUMERIC, 4)       AS max_ndvi,
+    ROUND(AVG(ndvi)::NUMERIC, 4)  AS avg_ndvi,
+    ROUND(AVG(osavi)::NUMERIC, 4) AS avg_osavi,
+    ROUND(AVG(gdvi)::NUMERIC, 4)  AS avg_gdvi,
+
+    ROUND(MIN(ndvi)::NUMERIC, 4)  AS min_ndvi,
+    ROUND(MAX(ndvi)::NUMERIC, 4)  AS max_ndvi,
     ROUND(
         100.0 * COUNT(*) / SUM(COUNT(*)) OVER (),
         2
