@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plant Health API — Usage Example</title>
+  <style>
+    body { font-family: sans-serif; max-width: 860px; margin: 40px auto; padding: 0 20px; }
+    h2 { margin-top: 2rem; }
+    pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+    .kpis { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+    .kpi { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 20px; min-width: 140px; }
+    .kpi .val { font-size: 1.6rem; font-weight: 700; color: #15803d; }
+    .kpi .lbl { font-size: 0.78rem; color: #6b7280; margin-top: 2px; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; }
+    th, td { border: 1px solid #e5e7eb; padding: 6px 10px; text-align: left; }
+    th { background: #f9fafb; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+    .red    { background:#fee2e2; color:#b91c1c; }
+    .green  { background:#dcfce7; color:#15803d; }
+    .yellow { background:#fef9c3; color:#92400e; }
+    #log { background:#1e1e1e; color:#86efac; padding:14px; border-radius:8px; font-size:12px; height:160px; overflow-y:auto; }
+  </style>
+</head>
+<body>
+
+<h1>🌿 Plant Health API — Example Usage</h1>
+<p>This page demonstrates how to use <code>plant_health_api.js</code> + the <code>data/</code> folder.</p>
+
+<!-- ── KPI Cards ─────────────────────────────────────────────────── -->
+<h2>KPI Summary</h2>
+<div class="kpis" id="kpi-container">Loading…</div>
+
+<!-- ── Sector Table ──────────────────────────────────────────────── -->
+<h2>Sector Performance</h2>
+<table id="sector-table">
+  <thead>
+    <tr>
+      <th>Sector</th><th>Plants</th><th>Avg NDVI</th><th>Avg NDRE</th>
+      <th>Total Yield</th><th>N-Deficient %</th>
+    </tr>
+  </thead>
+  <tbody id="sector-body">Loading…</tbody>
+</table>
+
+<!-- ── High Priority Plants ──────────────────────────────────────── -->
+<h2>High Priority Plants (nitrogen-deficient + low yield)</h2>
+<p id="priority-count"></p>
+<table id="priority-table">
+  <thead>
+    <tr>
+      <th>Plant ID</th><th>Sector</th><th>Row</th><th>Col</th>
+      <th>NDVI</th><th>NDRE</th><th>Yield (kg)</th><th>Nitrogen</th>
+    </tr>
+  </thead>
+  <tbody id="priority-body">Loading…</tbody>
+</table>
+
+<!-- ── Console Log ────────────────────────────────────────────────── -->
+<h2>Console Output</h2>
+<div id="log"></div>
+
+<!-- ── Scripts ──────────────────────────────────────────────────── -->
+<script src="plant_health_api.js"></script>
+<script>
+  const log = (msg) => {
+    const el = document.getElementById('log');
+    el.textContent += msg + '\n';
+    el.scrollTop = el.scrollHeight;
+  };
+
+  (async () => {
+    log('Initialising PlantHealthAPI…');
+    const api = new PlantHealthAPI('./data');
+    await api.init();
+
+    // ── KPI Cards ──────────────────────────────────────────────────
+    const s = api.getSummary();
+    const kpis = [
+      { val: s.total_plants?.toLocaleString(), lbl: 'Total Plants' },
+      { val: s.avg_ndvi?.toFixed(3),           lbl: 'Avg NDVI' },
+      { val: s.avg_ndre?.toFixed(3),           lbl: 'Avg NDRE' },
+      { val: (s.total_yield_kg/1000)?.toFixed(1) + ' t', lbl: 'Total Predicted Yield' },
+      { val: s.n_def_pct + '%',                lbl: 'Nitrogen Deficient' },
+      { val: s.critical?.toLocaleString(),     lbl: 'Critical Plants (NDVI<0)' },
+    ];
+    document.getElementById('kpi-container').innerHTML = kpis.map(k =>
+      `<div class="kpi"><div class="val">${k.val}</div><div class="lbl">${k.lbl}</div></div>`
+    ).join('');
+    log(`KPIs loaded. Total plants: ${s.total_plants}`);
+
+    // ── Sector Table ───────────────────────────────────────────────
+    const sectors = api.getAllSectors();
+    document.getElementById('sector-body').innerHTML = sectors.map(sec => {
+      const defBadge = sec.n_def_pct > 50
+        ? `<span class="badge red">${sec.n_def_pct}%</span>`
+        : sec.n_def_pct > 20
+          ? `<span class="badge yellow">${sec.n_def_pct}%</span>`
+          : `<span class="badge green">${sec.n_def_pct}%</span>`;
+      return `<tr>
+        <td><b>${sec.name}</b></td>
+        <td>${sec.count?.toLocaleString()}</td>
+        <td style="color:${PlantHealthAPI.ndviColor(sec.ndvi_mean)}">${sec.ndvi_mean?.toFixed(3)}</td>
+        <td style="color:${PlantHealthAPI.ndreColor(sec.ndre_mean)}">${sec.ndre_mean?.toFixed(3)}</td>
+        <td>${(sec.yield_total/1000)?.toFixed(1)} t</td>
+        <td>${defBadge}</td>
+      </tr>`;
+    }).join('');
+    log(`Sector table rendered: ${sectors.length} sectors`);
+
+    // ── High Priority Plants (first 20 rows) ──────────────────────
+    const hp = api.getHighPriorityPlants();
+    document.getElementById('priority-count').textContent =
+      `${hp.length.toLocaleString()} plants need immediate attention (nitrogen deficient AND yield < 20 kg). Showing first 20.`;
+
+    document.getElementById('priority-body').innerHTML = hp.slice(0, 20).map(p => `<tr>
+      <td><code style="font-size:11px">${p.plant_id}</code></td>
+      <td>${p.sector}</td>
+      <td>${p.row_index}</td>
+      <td>${p.col_index}</td>
+      <td style="color:${PlantHealthAPI.ndviColor(p.ndvi)}">${p.ndvi?.toFixed(3)}</td>
+      <td style="color:${PlantHealthAPI.ndreColor(p.ndre)}">${p.ndre?.toFixed(3) ?? 'N/A'}</td>
+      <td style="color:${PlantHealthAPI.yieldColor(p.yield_kg)}">${p.yield_kg}</td>
+      <td><span class="badge red">${p.nitrogen_status}</span></td>
+    </tr>`).join('');
+    log(`High-priority plants: ${hp.length}`);
+
+    // ── Recommendations ────────────────────────────────────────────
+    const recs = api.getRecommendations();
+    recs.forEach(r => log(`[${r.priority}] ${r.action} — ${r.affected_plants} plants`));
+
+    // ── Demo: sector query ─────────────────────────────────────────
+    const s02 = api.getBySector('S02');
+    log(`\nS02 plants: ${s02.length} (worst sector — 73% nitrogen deficient)`);
+
+    // ── Demo: sort by yield ────────────────────────────────────────
+    const top5 = api.sortBy('yield_kg', 'desc').slice(0, 5);
+    log(`\nTop 5 yielding plants:`);
+    top5.forEach(p => log(`  ${p.plant_id} → ${p.yield_kg} kg (${p.sector})`));
+
+    log('\nAll done ✓');
+  })();
+</script>
+</body>
+</html>
