@@ -1,89 +1,74 @@
 -- ============================================================
 -- schema.sql
--- PostGIS schema for plant health data
+-- PostGIS schema for pineapple plant health data
 -- Run once to set up the database.
 -- ============================================================
 
+-- Enable PostGIS extension
 CREATE EXTENSION IF NOT EXISTS postgis;
 
--- ── Main plants table ────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS plants (
-    id              SERIAL PRIMARY KEY,
-
-    -- identification
-    plant_id        TEXT,
-    geo_hash        TEXT,
-    sector_id       INTEGER,
-    sector_label    TEXT,
-    row_index       INTEGER,
-    col_index       INTEGER,
-
-    -- detection metadata
-    pixel_x         INTEGER,
-    pixel_y         INTEGER,
-    area_px         NUMERIC,
-    confidence      NUMERIC,
-
-    -- Vegetation indices
-    ndvi            NUMERIC(8,6),
-    osavi           NUMERIC(8,6),
-
-    -- Health classification
-    health_status   TEXT CHECK (
-        health_status IN ('healthy', 'moderate', 'diseased')
+-- ── Main pineapple crops table ──────────────────────────────
+CREATE TABLE IF NOT EXISTS pineapple_crops (
+    plant_id                    VARCHAR(100) PRIMARY KEY,
+    sector_id                   INT,
+    sector_label                VARCHAR(50),
+    pixel_x                     INT,
+    pixel_y                     INT,
+    geo_x                       DOUBLE PRECISION,
+    geo_y                       DOUBLE PRECISION,
+    geom                        GEOMETRY(Point, 32651),   -- PostGIS spatial point index (SRID 32651)
+    
+    -- Biometrics & Stage
+    area_px                     INT,
+    canopy_area                 DOUBLE PRECISION,         -- Physical footprint area in m2
+    predicted_growth_stage      VARCHAR(50) CHECK (
+        predicted_growth_stage IN ('Seedling', 'Vegetative', 'Flowering', 'Fruiting', 'Mature')
     ),
-    health_color    TEXT,
-    raster_crs      TEXT,
-
-    -- geometry
-    geom            GEOMETRY(Point, 4326),
-
-    -- audit
-    created_at      TIMESTAMPTZ DEFAULT NOW()
+    
+    -- Health scoring
+    health_score                DOUBLE PRECISION,         -- 0 to 100 continuous score
+    health_status               VARCHAR(50) CHECK (
+        health_status IN ('Healthy', 'Moderate', 'Stressed', 'Critical', 'BoundaryLimit')
+    ),
+    health_status_code          INT CHECK (
+        health_status_code IN (0, 1, 2, 3, 4)
+    ),
+    health_color                VARCHAR(20),
+    
+    -- Raw indices
+    osavi                       DOUBLE PRECISION,
+    ndvi                        DOUBLE PRECISION,
+    ndre                        DOUBLE PRECISION,
+    
+    -- Flight-specific telemetry
+    flight_date                 TIMESTAMP,
+    slope_degrees               DOUBLE PRECISION,
+    drainage_accumulation       DOUBLE PRECISION,
+    estimated_height            DOUBLE PRECISION,
+    canopy_circularity          DOUBLE PRECISION,
+    nearest_neighbor_dist_m     DOUBLE PRECISION,
+    
+    -- Calculated temporal changes
+    delta_canopy_area           DOUBLE PRECISION,
+    delta_ndvi                  DOUBLE PRECISION,
+    delta_ndre                  DOUBLE PRECISION,
+    stagnation_flag             BOOLEAN,
+    regression_flag             BOOLEAN,
+    
+    -- Audit
+    created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Spatial index
-CREATE INDEX IF NOT EXISTS idx_plants_geom
-    ON plants USING GIST (geom);
+-- Spatial index for high-speed maps / spatial queries
+CREATE INDEX IF NOT EXISTS idx_pineapple_crops_geom
+    ON pineapple_crops USING GIST (geom);
 
--- Fast lookups
-CREATE INDEX IF NOT EXISTS idx_plants_health_status
-    ON plants (health_status);
+-- Indexes for fast query lookups on dashboard filter keys
+CREATE INDEX IF NOT EXISTS idx_pineapple_crops_health_status
+    ON pineapple_crops (health_status);
 
-CREATE INDEX IF NOT EXISTS idx_plants_ndvi
-    ON plants (ndvi);
+CREATE INDEX IF NOT EXISTS idx_pineapple_crops_stage
+    ON pineapple_crops (predicted_growth_stage);
 
-CREATE INDEX IF NOT EXISTS idx_plants_osavi
-    ON plants (osavi);
-
-CREATE INDEX IF NOT EXISTS idx_plants_plant_id
-    ON plants (plant_id);
-
--- ── Helper view ──────────────────────────────────────────────
-CREATE OR REPLACE VIEW plant_health_summary AS
-SELECT
-    health_status,
-    health_color,
-
-    COUNT(*) AS plant_count,
-
-    ROUND(AVG(ndvi)::NUMERIC, 4)  AS avg_ndvi,
-    ROUND(AVG(osavi)::NUMERIC, 4) AS avg_osavi,
-
-    ROUND(MIN(ndvi)::NUMERIC, 4)  AS min_ndvi,
-    ROUND(MAX(ndvi)::NUMERIC, 4)  AS max_ndvi,
-
-    ROUND(MIN(osavi)::NUMERIC, 4) AS min_osavi,
-    ROUND(MAX(osavi)::NUMERIC, 4) AS max_osavi,
-
-    ROUND(
-        100.0 * COUNT(*) / SUM(COUNT(*)) OVER (),
-        2
-    ) AS pct_of_total
-
-FROM plants
-GROUP BY health_status, health_color
-ORDER BY health_status;
-
-COMMENT ON VIEW plant_health_summary IS
-'Quick summary of plant health distribution across all detected plants.';
+CREATE INDEX IF NOT EXISTS idx_pineapple_crops_flight_date
+    ON pineapple_crops (flight_date);
