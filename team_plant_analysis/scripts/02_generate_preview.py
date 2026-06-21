@@ -74,8 +74,7 @@ legend_elements = [
     Patch(facecolor='#FBC02D', label='Moderate (Score 40-70)\nExpected standard stage canopy performance'),
     Patch(facecolor='#FF5722', label='Stressed (Score 15-40)\nMild anomaly or low vegetation indices'),
     Patch(facecolor='#D32F2F', label='Critical (Score 0-15)\nSevere anomaly or absolute biological floor violation'),
-    Patch(facecolor='#1976D2', label='Out of Boundary\nLocated outside multispectral sensor coverage'),
-    Patch(facecolor='#757575', label='Noise / Outliers\nSegmented weeds or edge defects')
+    Patch(facecolor='#1976D2', label='Out of Boundary\nLocated outside multispectral sensor coverage')
 ]
 ax.legend(handles=legend_elements, loc='upper right', frameon=True, facecolor='white', edgecolor='none', fontsize=9)
 

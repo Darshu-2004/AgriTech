@@ -43,14 +43,15 @@ df['bbox_height_m'] = df['bbox_height'] * gsd_y
 
 print("Predicting growth stages for all crops...")
 valid_mask = df['sector_label'] != 'NOISE'
-df['predicted_growth_stage_name'] = 'NOISE'
+df['predicted_growth_stage'] = 'NOISE'
 
 if valid_mask.any():
+    # Model expects feature_cols which includes 'canopy_area_m2'
     X = df.loc[valid_mask, feature_cols].fillna(0.0).values
-    df.loc[valid_mask, 'predicted_growth_stage_name'] = model.predict(X)
+    df.loc[valid_mask, 'predicted_growth_stage'] = model.predict(X)
 
 print("Growth stage counts:")
-print(df['predicted_growth_stage_name'].value_counts())
+print(df['predicted_growth_stage'].value_counts())
 
 # 2. Spatial Neighborhood Smoothing using KD-Tree
 print("\nApplying KD-Tree Spatial Neighborhood Smoothing (K=8 neighbors)...")
@@ -91,7 +92,7 @@ df['health_color'] = '#FBC02D'
 stages = ['Seedling', 'Vegetative', 'Flowering', 'Fruiting', 'Mature']
 
 for stage in stages:
-    stage_mask = (df['predicted_growth_stage_name'] == stage) & valid_mask
+    stage_mask = (df['predicted_growth_stage'] == stage) & valid_mask
     sub_df = df[stage_mask]
     
     if len(sub_df) < 15:
@@ -191,42 +192,74 @@ for stage in stages:
         df.at[idx, 'health_status'] = status
         df.at[idx, 'health_color'] = color
 
+# Copy temporary scale area to schema-conforming column
+df['canopy_area'] = df['canopy_area_m2']
+
 # Handle the NOISE sector
-noise_mask = df['predicted_growth_stage_name'] == 'NOISE'
+noise_mask = df['predicted_growth_stage'] == 'NOISE'
 df.loc[noise_mask, 'health_status'] = 'NOISE'
 df.loc[noise_mask, 'health_color'] = '#757575'
 df.loc[noise_mask, 'health_score'] = np.nan
 
-print("\n=== Overall Health Status Distribution (ML Score Engine) ===")
+# 4. Filter out NOISE plants (both in predicted stage and health status)
+print("\nFiltering out NOISE plants from the database...")
+df = df[df['predicted_growth_stage'] != 'NOISE']
+df = df[df['health_status'] != 'NOISE']
+
+# 5. Add static and temporal placeholders for the extended schema
+placeholder_cols = {
+    'flight_date': np.nan,
+    'planted_at': np.nan,
+    'elevation': np.nan,
+    'slope_degrees': np.nan,
+    'drainage_accumulation': np.nan,
+    'estimated_height': np.nan,
+    'canopy_circularity': np.nan,
+    'nearest_neighbor_dist_m': np.nan,
+    'delta_canopy_area': np.nan,
+    'delta_ndvi': np.nan,
+    'delta_ndre': np.nan,
+    'stagnation_flag': np.nan,
+    'regression_flag': np.nan
+}
+
+for col, val in placeholder_cols.items():
+    df[col] = val
+
+print("\n=== Overall Health Status Distribution (Weeds/Noise Removed) ===")
 print(df['health_status'].value_counts())
 
-# Prune columns to essential ones for output
+# Prune and organize columns according to the specified copy-pastable schema
 columns_to_keep = [
     'plant_id',
-    'instance_id',
     'sector_id',
     'sector_label',
-    'row_index',
-    'col_index',
     'pixel_x',
     'pixel_y',
     'geo_x',
     'geo_y',
     'area_px',
-    'canopy_area_m2',
-    'bbox_x',
-    'bbox_y',
-    'bbox_width',
-    'bbox_height',
-    'mask_file',
-    'predicted_growth_stage_name',
+    'canopy_area',
+    'predicted_growth_stage',
     'health_score',
     'health_status',
     'health_color',
     'osavi',
     'ndvi',
     'ndre',
-    'osavi_smoothed'
+    'flight_date',
+    'planted_at',
+    'elevation',
+    'slope_degrees',
+    'drainage_accumulation',
+    'estimated_height',
+    'canopy_circularity',
+    'nearest_neighbor_dist_m',
+    'delta_canopy_area',
+    'delta_ndvi',
+    'delta_ndre',
+    'stagnation_flag',
+    'regression_flag'
 ]
 df = df[[col for col in columns_to_keep if col in df.columns]]
 
