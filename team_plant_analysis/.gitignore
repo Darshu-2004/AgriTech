@@ -5,11 +5,16 @@ __pycache__/
 
 # input data (large files)
 data/
+dataset1/
 *.tif
 *.tiff
 
 # generated outputs
 output/
+outputs/
+*.csv
+*.png
+*.zip
 
 # env
 .env
