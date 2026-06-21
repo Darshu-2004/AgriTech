@@ -1,0 +1,7 @@
+numpy
+pandas
+rasterio
+pyproj
+pillow
+scikit-learn
+scipy
