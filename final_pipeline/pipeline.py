@@ -18,7 +18,7 @@ from plant_loader import load_plants
 from index_assigner import assign_index
 from canopy_sampler import assign_canopy_indices
 from health_classifier import classify_health
-from colormaps import NDVI_CMAP, NDRE_CMAP
+from colormaps import NDVI_CMAP, NDRE_CMAP, OSAVI_CMAP
 
 
 def _add_latlon(df):
@@ -85,15 +85,23 @@ def run():
     elif config.USE_CANOPY_MASKS and have_masks:
         specs = [(config.NDVI_TIF, NDVI_CMAP, "ndvi"),
                  (config.NDRE_TIF, NDRE_CMAP, "ndre")]
+        osavi_spec = None
+        if config.USE_OSAVI_SOIL_MASK and config.OSAVI_TIF.exists():
+            osavi_spec = (config.OSAVI_TIF, OSAVI_CMAP, config.OSAVI_SOIL_THRESHOLD)
         for col, vals in assign_canopy_indices(
                 plants, config.ORTHO_TIF, config.MASKS_DIR, specs,
-                noise_label=config.NOISE_LABEL).items():
+                noise_label=config.NOISE_LABEL, osavi_spec=osavi_spec).items():
             plants[col] = vals
     else:
         for col, vals in assign_index(plants, config.NDVI_TIF, NDVI_CMAP, "ndvi").items():
             plants[col] = vals
         for col, vals in assign_index(plants, config.NDRE_TIF, NDRE_CMAP, "ndre").items():
             plants[col] = vals
+
+    # 3b. Fill index gaps with XGBoost (predicted plants flagged).
+    if config.USE_XGB_IMPUTE:
+        from xgb_imputer import impute_indices
+        plants = impute_indices(plants, noise_label=config.NOISE_LABEL)
 
     # 4. Derive a plant-health assessment from the indices.
     plants = classify_health(plants, noise_label=config.NOISE_LABEL)
@@ -104,8 +112,12 @@ def run():
         id_col, "sector_label", "latitude", "longitude", "x", "y",
         "in_orthomosaic", "pixel_x", "pixel_y", "area_px", "canopy_area_m2",
         "health_score", "health_status", "health_color",
+        "health_diagnosis", "limiting_factor",
+        "biomass_score", "nitrogen_score",
+        "health_cluster", "cluster_confidence", "is_anomaly", "index_source",
         "ndvi", "ndvi_smoothed", "ndvi_category", "ndvi_match_dist", "ndvi_canopy_px",
         "ndre", "ndre_category", "ndre_match_dist", "ndre_canopy_px",
+        "osavi", "canopy_soil_frac",
     ]
     ordered = [c for c in preferred if c in plants.columns]
     ordered += [c for c in plants.columns if c not in ordered]

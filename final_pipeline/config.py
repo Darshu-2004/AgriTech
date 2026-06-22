@@ -31,6 +31,14 @@ PLANTS_CRS = "EPSG:32647"
 NDVI_TIF = ROOT_DIR / "maps" / "Task-of-2026-03-22T070712342Z-orthophoto-NDVI.tif"
 NDRE_TIF = ROOT_DIR / "maps" / "Task-of-2026-03-22T070712342Z-orthophoto-NDRE.tif"
 
+# OSAVI (soil-adjusted) map. Used to mask bare-soil / background pixels inside
+# each canopy mask so NDVI/NDRE are averaged over vegetation only.
+OSAVI_TIF = ROOT_DIR / "maps" / "Task-of-2026-03-22T063838646Z-orthophoto-OSAVI.tif"
+USE_OSAVI_SOIL_MASK = True
+# Canopy pixels with OSAVI below this (on the -0.2..1.0 colormap scale) are
+# treated as soil and excluded from the NDVI/NDRE canopy mean.
+OSAVI_SOIL_THRESHOLD = 0.2
+
 # True-color orthomosaic, used as the visualization basemap, for shadow
 # masking, and as the reference extent for the plant-coverage check. This is
 # the exact ortho the plant detections were made on (pixel-perfect overlay).
@@ -69,6 +77,11 @@ ORTHO_GSD_M = 0.013458
 # masks are not available. Set False for the simpler centre-window mean.
 USE_SHADOW_MASKING = True
 SHADOW_WINDOW_RADIUS_PX = 5     # half-size of the ortho window per plant
+
+# XGBoost gap-filling: predict NDVI/NDRE for non-NOISE plants the index maps
+# don't cover, from canopy morphology + spatial context. Predicted rows are
+# flagged index_source='predicted'.
+USE_XGB_IMPUTE = True
 
 # Detections labelled NOISE are weeds / false positives, not crops; their
 # index + health values are forced blank.

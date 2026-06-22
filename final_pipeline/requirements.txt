@@ -5,3 +5,4 @@ pyproj
 pillow
 scikit-learn
 scipy
+xgboost

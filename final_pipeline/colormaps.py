@@ -128,3 +128,7 @@ class IndexColormap:
 
 NDVI_CMAP = IndexColormap("NDVI", NDVI_HEX, NDVI_ACTIVE_EDGES, NDVI_LABELS)
 NDRE_CMAP = IndexColormap("NDRE", NDRE_HEX, NDRE_BINS, NDRE_LABELS)
+
+# OSAVI (Optimized Soil-Adjusted Vegetation Index) maps use the same RdYlGn
+# scale as NDVI. Used as a soil gate: low OSAVI = bare soil / background.
+OSAVI_CMAP = IndexColormap("OSAVI", NDVI_HEX, NDVI_ACTIVE_EDGES, NDVI_LABELS)

@@ -1,23 +1,29 @@
 """
-Turn raw NDVI / NDRE values into an actionable plant-health assessment.
+Agronomic plant-health model from NDVI + NDRE.
 
-Adapted (for an NDVI/NDRE-only dataset) from the AgriTech team_plant_analysis
-health engine. Stages:
+Two indices, two biological meanings:
+  - NDVI  -> plant BIOMASS  (leaf area / green canopy density)
+  - NDRE  -> plant NITROGEN (leaf chlorophyll, i.e. N uptake)
 
-  1. KD-Tree spatial smoothing  - blend each plant's NDVI with its 8 nearest
-     neighbours to suppress per-pixel noise.
-  2. Vigor score (0-100)        - weighted blend of NDVI + NDRE.
-  3. IsolationForest anomaly    - flag spectral outliers and blend their score.
-  4. 4-tier classification      - Critical / Stressed / Moderate / Healthy,
-     plus 'Out of Boundary' (no index) and 'NOISE', each with a hex color.
+A single health number hides *why* a plant struggles, so this model keeps the
+two axes and reports both, then diagnoses the limiting factor.
 
-OSAVI and the growth-stage RandomForest from the source repo are intentionally
-omitted: this dataset has no OSAVI raster and no canopy/bbox measurements.
+Pipeline:
+  1. Spatial smoothing (KD-Tree, 8 neighbours) of each index.
+  2. Percentile scores: biomass_score & nitrogen_score (0-100), the plant's
+     rank within the field — directly actionable ("bottom 10% for nitrogen").
+  3. Unsupervised GaussianMixture over (NDVI, NDRE) -> data-driven plant
+     archetypes (health_cluster) with a membership confidence.
+  4. IsolationForest -> spectral anomaly flag.
+  5. health_score (0-100) + 4-tier health_status (for the map) and an
+     interpretable health_diagnosis + limiting_factor.
+
+NOISE / out-of-coverage plants get blank values.
 """
 
 import numpy as np
+import pandas as pd
 
-# 4-tier health palette (same hex codes as the source repo for consistency).
 STATUS_COLORS = {
     "Healthy":         "#2E7D32",
     "Moderate":        "#FBC02D",
@@ -27,20 +33,10 @@ STATUS_COLORS = {
     "NOISE":           "#757575",
 }
 
-# Vigor is scaled to the actual NDVI/NDRE distribution (robust percentiles)
-# so the health spread is meaningful regardless of the absolute index scale.
-ROBUST_LO_PCT, ROBUST_HI_PCT = 10, 90
-
-
-def _robust_scale(x, lo_pct=ROBUST_LO_PCT, hi_pct=ROBUST_HI_PCT):
-    """Map values from their p10..p90 range onto 0..100 (clipped)."""
-    valid = x[~np.isnan(x)]
-    if valid.size < 5:
-        return np.full_like(x, 50.0)
-    lo, hi = np.percentile(valid, [lo_pct, hi_pct])
-    if hi - lo < 1e-6:
-        hi = lo + 1.0
-    return np.clip((x - lo) / (hi - lo), 0.0, 1.0) * 100
+# Tercile cut points (percentile scores) for low / medium / high on each axis.
+LOW_CUT, HIGH_CUT = 33.0, 66.0
+# How much one axis must trail the other to be called the limiting factor.
+LIMIT_MARGIN = 12.0
 
 
 def _spatial_smooth(values, xs, ys, k=8, w_self=0.7):
@@ -48,49 +44,113 @@ def _spatial_smooth(values, xs, ys, k=8, w_self=0.7):
     try:
         from scipy.spatial import KDTree
     except Exception:
-        return values  # scipy missing -> skip smoothing gracefully
-
+        return values
     out = values.copy()
     mask = ~np.isnan(values)
     if mask.sum() < 2:
         return out
     coords = np.column_stack([xs[mask], ys[mask]])
-    vals = values[mask]
+    vals = values[mask].copy()
     tree = KDTree(coords)
     _, nbr = tree.query(coords, k=min(k + 1, len(coords)))
+    blended = vals.copy()
     for i in range(len(vals)):
         neigh = vals[nbr[i][1:]]
         neigh = neigh[~np.isnan(neigh)]
         if len(neigh):
-            vals[i] = w_self * vals[i] + (1 - w_self) * neigh.mean()
-    out[mask] = vals
+            blended[i] = w_self * vals[i] + (1 - w_self) * neigh.mean()
+    out[mask] = blended
     return out
 
 
-def _anomaly_score(ndvi, ndre):
-    """Per-plant normalized anomaly score in [0,1] via IsolationForest."""
+def _percentile_score(x, mask):
+    """0-100 rank-percentile of x within the valid (mask) subset."""
+    out = np.full(len(x), np.nan)
+    if mask.sum() == 0:
+        return out
+    out[mask] = pd.Series(x[mask]).rank(pct=True).to_numpy() * 100
+    return out
+
+
+def _gmm_clusters(ndvi, ndre, mask, k=4):
+    """GaussianMixture over (NDVI, NDRE). Returns (labels, confidence)."""
+    labels = np.full(len(ndvi), -1)
+    conf = np.full(len(ndvi), np.nan)
+    try:
+        from sklearn.mixture import GaussianMixture
+        from sklearn.preprocessing import StandardScaler
+    except Exception:
+        return labels, conf, None
+    if mask.sum() < max(50, k * 5):
+        return labels, conf, None
+    X = np.column_stack([ndvi[mask], ndre[mask]])
+    Xs = StandardScaler().fit_transform(X)
+    gmm = GaussianMixture(n_components=k, covariance_type="full",
+                          random_state=42, n_init=3)
+    lab = gmm.fit_predict(Xs)
+    proba = gmm.predict_proba(Xs).max(axis=1)
+    # Order clusters by overall vigour (mean NDVI+NDRE) so id 0 = worst.
+    order = np.argsort([X[lab == c].mean() for c in range(k)])
+    remap = {old: new for new, old in enumerate(order)}
+    lab = np.array([remap[c] for c in lab])
+    labels[mask] = lab
+    conf[mask] = np.round(proba, 3)
+    centroids = {remap[c]: X[gmm.predict(Xs) == c].mean(axis=0)
+                 for c in range(k)}
+    return labels, conf, centroids
+
+
+def _anomaly_flag(ndvi, ndre, mask):
     try:
         from sklearn.ensemble import IsolationForest
     except Exception:
-        return None
-    mask = ~np.isnan(ndvi)
+        return np.zeros(len(ndvi), dtype=bool)
+    out = np.zeros(len(ndvi), dtype=bool)
     if mask.sum() < 30:
-        return None
-    X = np.column_stack([
-        np.nan_to_num(ndvi[mask], nan=np.nanmedian(ndvi[mask])),
-        np.nan_to_num(ndre[mask], nan=np.nanmedian(ndre[mask])),
-    ])
-    iso = IsolationForest(contamination=0.12, random_state=42)
-    iso.fit(X)
-    s = iso.decision_function(X)
-    med, std = np.median(s), (np.std(s) or 0.05)
-    norm = np.clip((s - (med - 2 * std)) / (3 * std), 0.0, 1.0)
-    out = np.full(len(ndvi), np.nan)
-    out[mask] = norm
+        return out
+    X = np.column_stack([ndvi[mask], ndre[mask]])
+    iso = IsolationForest(contamination=0.10, random_state=42)
+    out[mask] = iso.fit_predict(X) == -1
     return out
 
 
-def _classify(score):
+def _level(score):
+    if np.isnan(score):
+        return None
+    if score < LOW_CUT:
+        return "low"
+    if score < HIGH_CUT:
+        return "med"
+    return "high"
+
+
+def _diagnose(biomass, nitrogen):
+    """Agronomic diagnosis + limiting factor from the two axis scores."""
+    b, n = _level(biomass), _level(nitrogen)
+    if b is None or n is None:
+        return None, None
+    # limiting factor
+    if nitrogen < biomass - LIMIT_MARGIN:
+        limiting = "Nitrogen"
+    elif biomass < nitrogen - LIMIT_MARGIN:
+        limiting = "Biomass"
+    else:
+        limiting = "Balanced"
+    # diagnosis
+    if b == "high" and n == "high":
+        diag = "Healthy & vigorous"
+    elif b == "low" and n == "low":
+        diag = "Critical (low biomass & N)"
+    elif n == "low" and b in ("high", "med"):
+        diag = "Nitrogen deficient"
+    elif b == "low" and n in ("high", "med"):
+        diag = "Sparse canopy / early growth"
+    else:
+        diag = "Moderate"
+    return diag, limiting
+
+
+def _status(score):
     if np.isnan(score):
         return "Out of Boundary", STATUS_COLORS["Out of Boundary"]
     if score < 15:
@@ -103,53 +163,81 @@ def _classify(score):
 
 
 def classify_health(df, noise_label="NOISE"):
-    """
-    Add health columns to ``df`` in place and return it.
-
-    New columns: ndvi_smoothed, health_score, health_status, health_color.
-    """
+    """Add the agronomic health-model columns to ``df`` and return it."""
     ndvi = df["ndvi"].to_numpy(dtype=float)
     ndre = df["ndre"].to_numpy(dtype=float)
     xs = df["x"].to_numpy(dtype=float)
     ys = df["y"].to_numpy(dtype=float)
+    valid = ~np.isnan(ndvi) & ~np.isnan(ndre)
 
-    # 1. Spatial smoothing of NDVI.
+    # 1. Spatial smoothing.
     ndvi_sm = _spatial_smooth(ndvi, xs, ys)
+    ndre_sm = _spatial_smooth(ndre, xs, ys)
     df["ndvi_smoothed"] = np.round(ndvi_sm, 3)
 
-    # 2. Vigor score, scaled to this dataset's NDVI/NDRE distribution.
-    v_ndvi = _robust_scale(ndvi_sm)
-    v_ndre = _robust_scale(ndre)
-    v_ndre = np.where(np.isnan(v_ndre), 50.0, v_ndre)
-    vigor = 0.65 * v_ndvi + 0.35 * v_ndre
+    # 2. Agronomic axis scores (field-relative rank).
+    biomass = _percentile_score(ndvi_sm, valid)     # NDVI  -> biomass
+    nitrogen = _percentile_score(ndre_sm, valid)    # NDRE  -> nitrogen
+    df["biomass_score"] = np.round(biomass, 1)
+    df["nitrogen_score"] = np.round(nitrogen, 1)
 
-    # 3. Blend in anomaly score where available.
-    anom = _anomaly_score(ndvi_sm, ndre)
-    if anom is not None:
-        norm = anom * 100
-        score = np.where(np.isnan(norm), vigor, 0.75 * vigor + 0.25 * norm)
-    else:
-        score = vigor
-    score = np.where(np.isnan(ndvi_sm), np.nan, score)
+    # 3. Unsupervised archetypes.
+    clusters, conf, centroids = _gmm_clusters(ndvi_sm, ndre_sm, valid)
+    df["health_cluster"] = clusters
+    df["cluster_confidence"] = conf
 
-    # 4. Classify.
-    statuses, colors = [], []
-    for s in score:
-        st, col = _classify(s)
-        statuses.append(st)
-        colors.append(col)
+    # 4. Anomaly flag.
+    df["is_anomaly"] = _anomaly_flag(ndvi_sm, ndre_sm, valid)
+
+    # 5. Overall score (biomass-led) + status + diagnosis.
+    score = np.where(valid, 0.55 * biomass + 0.45 * nitrogen, np.nan)
+    # An outlier that is low on both axes is pushed toward Critical.
+    both_low = valid & (biomass < LOW_CUT) & (nitrogen < LOW_CUT)
+    score = np.where(both_low & df["is_anomaly"].to_numpy(),
+                     np.minimum(score, 12.0), score)
     df["health_score"] = np.round(score, 1)
+
+    statuses, colors, diags, limits = [], [], [], []
+    for i in range(len(df)):
+        st, col = _status(score[i])
+        statuses.append(st); colors.append(col)
+        d, lim = _diagnose(biomass[i], nitrogen[i])
+        diags.append(d); limits.append(lim)
     df["health_status"] = statuses
     df["health_color"] = colors
+    df["health_diagnosis"] = diags
+    df["limiting_factor"] = limits
 
     # NOISE override.
     if "sector_label" in df.columns:
-        nmask = df["sector_label"] == noise_label
+        nmask = (df["sector_label"] == noise_label).to_numpy()
+        for c in ["health_score", "biomass_score", "nitrogen_score",
+                  "cluster_confidence"]:
+            df.loc[nmask, c] = np.nan
+        df.loc[nmask, "health_cluster"] = -1
         df.loc[nmask, "health_status"] = "NOISE"
         df.loc[nmask, "health_color"] = STATUS_COLORS["NOISE"]
-        df.loc[nmask, "health_score"] = np.nan
+        df.loc[nmask, ["health_diagnosis", "limiting_factor"]] = None
 
-    print("[health_classifier] status distribution:")
+    _report(df, centroids)
+    return df
+
+
+def _report(df, centroids):
+    print("[health_model] status distribution:")
     for k, v in df["health_status"].value_counts().items():
         print(f"    {k:<16} {v:>7,}")
-    return df
+    diag = df["health_diagnosis"].dropna()
+    if len(diag):
+        print("[health_model] diagnosis:")
+        for k, v in diag.value_counts().items():
+            print(f"    {k:<30} {v:>7,}")
+    lim = df["limiting_factor"].dropna()
+    if len(lim):
+        print("[health_model] limiting factor:",
+              ", ".join(f"{k}={v:,}" for k, v in lim.value_counts().items()))
+    if centroids:
+        print("[health_model] GMM archetype centroids (NDVI, NDRE):")
+        for c in sorted(centroids):
+            cx = centroids[c]
+            print(f"    cluster {c}: NDVI={cx[0]:.3f}  NDRE={cx[1]:.3f}")

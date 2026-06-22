@@ -71,9 +71,8 @@ def build_points():
         before = len(df)
         df = df[df["in_orthomosaic"]]
         print(f"[viz] dropped {before - len(df)} plants outside orthomosaic extent")
-    cols = ["plant_id", "sector_label", "x", "y", "latitude", "longitude",
-            "ndvi", "ndvi_category", "ndre", "ndre_category",
-            "health_score", "health_status", "health_color"]
+    cols = ["plant_id", "sector_label", "x", "y",
+            "ndvi", "ndre", "biomass_score", "nitrogen_score", "index_source"]
     cols = [c for c in cols if c in df.columns]
     sub = df[cols].copy()
     # round UTM coords to mm to keep the embedded JSON compact
@@ -124,9 +123,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <h3>Plant Health Map</h3>
   <label>Color by</label>
   <select id="metric">
-    <option value="health">Health status</option>
-    <option value="ndvi">NDVI</option>
-    <option value="ndre">NDRE</option>
+    <option value="biomass_score">Biomass (NDVI)</option>
+    <option value="nitrogen_score">Nitrogen (NDRE)</option>
+    <option value="ndvi">NDVI (raw)</option>
+    <option value="ndre">NDRE (raw)</option>
   </select>
   <label>Sector</label>
   <select id="sector"><option value="ALL">All</option></select>
@@ -173,17 +173,29 @@ const sectors=[...new Set(DATA.map(d=>d.sector_label).filter(Boolean))].sort();
 const sel=document.getElementById('sector');
 sectors.forEach(s=>{const o=document.createElement('option');o.value=o.textContent=s;sel.appendChild(o);});
 
-const HEALTH_COLORS={Healthy:'#2E7D32',Moderate:'#FBC02D',Stressed:'#FF5722',
-  Critical:'#D32F2F','Out of Boundary':'#1976D2',NOISE:'#757575'};
+// 0-100 score ramps. Biomass = brown->green (canopy density);
+// Nitrogen = purple->yellow (viridis, distinct hue).
+function _lerp(stops,t){const n=stops.length-1;const i=Math.min(n-1,Math.floor(t*n));
+  const f=t*n-i,a=stops[i],b=stops[i+1];
+  return `rgb(${(a[0]+(b[0]-a[0])*f)|0},${(a[1]+(b[1]-a[1])*f)|0},${(a[2]+(b[2]-a[2])*f)|0})`;}
+const BIOMASS_STOPS=[[140,81,10],[216,179,101],[247,247,191],[127,188,65],[26,120,55]];
+const NITRO_STOPS=[[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+function rampScore(v,kind){
+  if(!Number.isFinite(v)) return '#888';
+  const t=Math.max(0,Math.min(1,v/100));
+  return _lerp(kind==='nitrogen_score'?NITRO_STOPS:BIOMASS_STOPS,t);
+}
+const SCORE_TITLE={biomass_score:'Biomass score',nitrogen_score:'Nitrogen score'};
 
 function draw(){
   const metric=document.getElementById('metric').value;
   const sector=sel.value;
   const minr=document.getElementById('minr');
   const minLabel=document.getElementById('minLabel');
-  const health=(metric==='health');
-  minr.disabled=health;
-  minLabel.style.opacity=health?0.4:1;
+  const score=(metric==='biomass_score'||metric==='nitrogen_score');
+  const isIndex=(metric==='ndvi'||metric==='ndre');
+  minr.disabled=!isIndex;
+  minLabel.style.opacity=isIndex?1:0.4;
   const minv=parseFloat(minr.value);
   document.getElementById('minv').textContent=minv.toFixed(2);
   const offX=parseFloat(document.getElementById('offx').value);
@@ -195,10 +207,10 @@ function draw(){
   DATA.forEach(d=>{
     if(sector!=='ALL' && d.sector_label!==sector) return;
     let color;
-    if(health){
-      if(!d.health_status) return;
-      color=HEALTH_COLORS[d.health_status]||'#888';
-      if(Number.isFinite(d.health_score)){scored++; sum+=d.health_score;}
+    if(score){
+      const v=d[metric];
+      if(!Number.isFinite(v)) return;
+      color=rampScore(v,metric); scored++; sum+=v;
     }else{
       const v=d[metric];
       if(!Number.isFinite(v)||v<minv) return;
@@ -209,25 +221,31 @@ function draw(){
       renderer:canvasRenderer,
       radius:3,color:'#222',weight:.3,fillColor:color,fillOpacity:.95
     }).bindPopup(
-      `<b>${d.plant_id||''}</b><br>Sector: ${d.sector_label||'-'}<br>`+
-      `Health: <b>${d.health_status||'-'}</b> (score ${d.health_score??'-'})<br>`+
-      `NDVI: ${d.ndvi??'-'} (${d.ndvi_category||'-'})<br>`+
-      `NDRE: ${d.ndre??'-'} (${d.ndre_category||'-'})`
+      `<b>${d.plant_id||''}</b> &nbsp;Sector: ${d.sector_label||'-'}<br>`+
+      `Biomass (NDVI ${d.ndvi??'-'}): ${d.biomass_score??'-'}/100<br>`+
+      `Nitrogen (NDRE ${d.ndre??'-'}): ${d.nitrogen_score??'-'}/100`+
+      (d.index_source==='predicted'?'<br><i>NDVI/NDRE predicted (XGBoost)</i>':'')
     ).addTo(layer);
   });
   const mean = scored ? (sum/scored) : null;
-  document.getElementById('stat').innerHTML=health?
-    `Showing <b>${shown.toLocaleString()}</b> plants<br>Mean health score: <b>${mean!==null?mean.toFixed(1):'-'}</b>`:
-    `Showing <b>${shown.toLocaleString()}</b> plants<br>Mean ${metric.toUpperCase()}: <b>${mean!==null?mean.toFixed(3):'-'}</b>`;
-  renderLegend(health);
+  let label, dp;
+  if(score){label=SCORE_TITLE[metric].toLowerCase(); dp=1;}
+  else {label=metric.toUpperCase(); dp=3;}
+  document.getElementById('stat').innerHTML=
+    `Showing <b>${shown.toLocaleString()}</b> plants<br>`+
+    `Mean ${label}: <b>${mean!==null?mean.toFixed(dp):'-'}</b>`;
+  renderLegend(metric);
 }
 
 const legend=document.getElementById('legend');
-function renderLegend(health){
-  if(health){
-    legend.innerHTML='<b>Health status</b><br>'+
-      ['Healthy','Moderate','Stressed','Critical','Out of Boundary','NOISE']
-      .map(s=>`<i style="background:${HEALTH_COLORS[s]}"></i>${s}`).join('<br>');
+function renderLegend(metric){
+  if(metric==='biomass_score'||metric==='nitrogen_score'){
+    const sub=metric==='biomass_score'?'leaf area / canopy density':
+                                       'chlorophyll / N uptake';
+    legend.innerHTML=`<b>${SCORE_TITLE[metric]}</b><br>`+
+      `<span style="font-size:11px;color:#666">${sub}</span><br>`+
+      [['100 high',100],['75',75],['50',50],['25',25],['0 low',0]]
+      .map(([t,v])=>`<i style="background:${rampScore(v,metric)}"></i>${t}`).join('<br>');
   }else{
     legend.innerHTML='<b>Index value</b><br>'+
       [['0.8',0.8],['0.4',0.4],['0.0',0.0],['-0.4',-0.4],['-0.8',-0.8]]
