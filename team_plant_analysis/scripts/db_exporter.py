@@ -50,37 +50,36 @@ def export_to_db():
         
         create_table_query = f"""
         CREATE TABLE pineapple_crops (
-            plant_id VARCHAR(100) PRIMARY KEY,
-            sector_id INT,
-            sector_label VARCHAR(50),
-            pixel_x INT,
-            pixel_y INT,
-            geo_x DOUBLE PRECISION,
-            geo_y DOUBLE PRECISION,
-            geom GEOMETRY(Point, {DB_SRID}),
-            area_px INT,
-            canopy_area DOUBLE PRECISION,
-            predicted_growth_stage VARCHAR(50),
-            health_score DOUBLE PRECISION,
-            health_status VARCHAR(50),
-            health_color VARCHAR(20),
-            osavi DOUBLE PRECISION,
-            ndvi DOUBLE PRECISION,
-            ndre DOUBLE PRECISION,
-            flight_date TIMESTAMP,
-            planted_at TIMESTAMP,
-            elevation DOUBLE PRECISION,
-            slope_degrees DOUBLE PRECISION,
-            drainage_accumulation DOUBLE PRECISION,
-            estimated_height DOUBLE PRECISION,
-            canopy_circularity DOUBLE PRECISION,
-            nearest_neighbor_dist_m DOUBLE PRECISION,
-            delta_canopy_area DOUBLE PRECISION,
-            delta_ndvi DOUBLE PRECISION,
-            delta_ndre DOUBLE PRECISION,
-            stagnation_flag BOOLEAN,
-            regression_flag BOOLEAN,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            plant_id                    VARCHAR(100) PRIMARY KEY,
+            sector_id                   INT,
+            sector_label                VARCHAR(50),
+            pixel_x                     INT,
+            pixel_y                     INT,
+            geo_x                       DOUBLE PRECISION,
+            geo_y                       DOUBLE PRECISION,
+            geom                        GEOMETRY(Point, {DB_SRID}),
+            area_px                     INT,
+            canopy_area                 DOUBLE PRECISION,
+            predicted_growth_stage      VARCHAR(50),
+            health_score                DOUBLE PRECISION,
+            health_status               VARCHAR(50),
+            health_status_code          INT,
+            health_color                VARCHAR(20),
+            osavi                       DOUBLE PRECISION,
+            ndvi                        DOUBLE PRECISION,
+            ndre                        DOUBLE PRECISION,
+            flight_date                 TIMESTAMP,
+            slope_degrees               DOUBLE PRECISION,
+            drainage_accumulation       DOUBLE PRECISION,
+            estimated_height            DOUBLE PRECISION,
+            canopy_circularity          DOUBLE PRECISION,
+            nearest_neighbor_dist_m     DOUBLE PRECISION,
+            delta_canopy_area           DOUBLE PRECISION,
+            delta_ndvi                  DOUBLE PRECISION,
+            delta_ndre                  DOUBLE PRECISION,
+            stagnation_flag             BOOLEAN,
+            regression_flag             BOOLEAN,
+            created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """
         cursor.execute(create_table_query)
@@ -93,16 +92,16 @@ def export_to_db():
         
         # 4. Perform high-speed bulk COPY from StringIO buffer
         print("Bulk uploading records to PostgreSQL (COPY EXPERT)...")
+        buffer = io.StringIO()
         columns = [
             'plant_id', 'sector_id', 'sector_label', 'pixel_x', 'pixel_y',
             'geo_x', 'geo_y', 'area_px', 'canopy_area', 'predicted_growth_stage',
-            'health_score', 'health_status', 'health_color', 'osavi', 'ndvi', 'ndre',
-            'flight_date', 'planted_at', 'elevation', 'slope_degrees', 'drainage_accumulation',
+            'health_score', 'health_status', 'health_status_code', 'health_color',
+            'osavi', 'ndvi', 'ndre', 'flight_date', 'slope_degrees', 'drainage_accumulation',
             'estimated_height', 'canopy_circularity', 'nearest_neighbor_dist_m',
             'delta_canopy_area', 'delta_ndvi', 'delta_ndre', 'stagnation_flag', 'regression_flag'
         ]
         
-        buffer = io.StringIO()
         df[columns].to_csv(buffer, sep='\t', header=False, index=False, na_rep='\\N')
         buffer.seek(0)
         

@@ -26,6 +26,16 @@ if not os.path.exists(model_path):
 df = pd.read_csv(csv_path)
 print(f"Loaded {len(df)} records.")
 
+# Run XGBoost gap-filling for missing indices (out of boundary crops)
+try:
+    from xgb_imputer import impute_indices
+    print("Running XGBoost gap-filling for missing index values...")
+    df = impute_indices(df, noise_label='NOISE')
+except Exception as e:
+    print(f"Warning: XGBoost gap-filling skipped due to error: {e}")
+    df['index_source'] = np.where(df['ndvi'].notna(), 'measured', None)
+
+
 # 1. Growth Stage Prediction using the serialized Random Forest model
 print("Loading growth stage classifier model...")
 with open(model_path, 'rb') as f:
@@ -43,15 +53,14 @@ df['bbox_height_m'] = df['bbox_height'] * gsd_y
 
 print("Predicting growth stages for all crops...")
 valid_mask = df['sector_label'] != 'NOISE'
-df['predicted_growth_stage'] = 'NOISE'
+df['predicted_growth_stage_name'] = 'NOISE'
 
 if valid_mask.any():
-    # Model expects feature_cols which includes 'canopy_area_m2'
     X = df.loc[valid_mask, feature_cols].fillna(0.0).values
-    df.loc[valid_mask, 'predicted_growth_stage'] = model.predict(X)
+    df.loc[valid_mask, 'predicted_growth_stage_name'] = model.predict(X)
 
 print("Growth stage counts:")
-print(df['predicted_growth_stage'].value_counts())
+print(df['predicted_growth_stage_name'].value_counts())
 
 # 2. Spatial Neighborhood Smoothing using KD-Tree
 print("\nApplying KD-Tree Spatial Neighborhood Smoothing (K=8 neighbors)...")
@@ -92,7 +101,7 @@ df['health_color'] = '#FBC02D'
 stages = ['Seedling', 'Vegetative', 'Flowering', 'Fruiting', 'Mature']
 
 for stage in stages:
-    stage_mask = (df['predicted_growth_stage'] == stage) & valid_mask
+    stage_mask = (df['predicted_growth_stage_name'] == stage) & valid_mask
     sub_df = df[stage_mask]
     
     if len(sub_df) < 15:
@@ -192,44 +201,99 @@ for stage in stages:
         df.at[idx, 'health_status'] = status
         df.at[idx, 'health_color'] = color
 
-# Copy temporary scale area to schema-conforming column
-df['canopy_area'] = df['canopy_area_m2']
-
 # Handle the NOISE sector
-noise_mask = df['predicted_growth_stage'] == 'NOISE'
+noise_mask = df['predicted_growth_stage_name'] == 'NOISE'
 df.loc[noise_mask, 'health_status'] = 'NOISE'
 df.loc[noise_mask, 'health_color'] = '#757575'
 df.loc[noise_mask, 'health_score'] = np.nan
 
-# 4. Filter out NOISE plants (both in predicted stage and health status)
-print("\nFiltering out NOISE plants from the database...")
-df = df[df['predicted_growth_stage'] != 'NOISE']
-df = df[df['health_status'] != 'NOISE']
+# Calculate Biomass Weights (Allometric Modeling)
+print("\nPredicting crop-level biomass weights...")
+ndvi_filled = df['ndvi'].fillna(0.3)
+# Allometric formula: W = 34.0 * (area_m2 ^ 1.2) * (NDVI + 0.1)
+df['predicted_biomass_kg'] = np.round(34.0 * (df['canopy_area_m2'] ** 1.2) * (ndvi_filled + 0.1), 3)
 
-# 5. Add static and temporal placeholders for the extended schema
-placeholder_cols = {
-    'flight_date': np.nan,
-    'planted_at': np.nan,
-    'elevation': np.nan,
-    'slope_degrees': np.nan,
-    'drainage_accumulation': np.nan,
-    'estimated_height': np.nan,
-    'canopy_circularity': np.nan,
-    'nearest_neighbor_dist_m': np.nan,
-    'delta_canopy_area': np.nan,
-    'delta_ndvi': np.nan,
-    'delta_ndre': np.nan,
-    'stagnation_flag': np.nan,
-    'regression_flag': np.nan
+# Force noise to zero
+df.loc[noise_mask, 'predicted_biomass_kg'] = 0.0
+
+# --- Generate Sector-Wise Biomass Aggregation CSV ---
+print("\nGenerating sector-wise biomass aggregation database...")
+sector_stats = []
+
+# Exclude NOISE and rows where sector_label is missing/nan
+valid_sectors = df[(df['predicted_growth_stage_name'] != 'NOISE') & (df['sector_label'].notna())]
+
+for sector, group in valid_sectors.groupby(['sector_id', 'sector_label']):
+    sec_id, sec_label = sector
+    
+    # Calculate counts
+    total_crops = len(group)
+    if total_crops == 0:
+        continue
+    
+    # Calculate total predicted biomass in metric tons (tonnes)
+    total_predicted_biomass = round(group['predicted_biomass_kg'].sum() / 1000.0, 3)
+        
+    sector_stats.append({
+        'sector_id': sec_id,
+        'sector_label': sec_label,
+        'total_active_plants': total_crops,
+        'predicted_biomass_tonnes': total_predicted_biomass,
+        'predicted_yield_tonnes': np.nan,
+        'market_grade': np.nan
+    })
+
+if sector_stats:
+    sector_df = pd.DataFrame(sector_stats).sort_values('sector_id')
+    sector_csv_path = os.path.join(workspace_dir, 'sector_biomass_predictions.csv')
+    sector_df.to_csv(sector_csv_path, index=False)
+    print(f"Sector-wise database successfully saved to: {sector_csv_path}")
+    
+    # Copy to artifact directory if it exists
+    artifact_dir = r'C:\Users\dabbu\.gemini\antigravity\brain\9ee7a796-f500-422b-9f2c-cb0f2a00e38f'
+    if os.path.exists(artifact_dir):
+        try:
+            import shutil
+            shutil.copy(sector_csv_path, os.path.join(artifact_dir, 'sector_biomass_predictions.csv'))
+            print("Copied sector database to artifact directory.")
+        except Exception as e:
+            print(f"Could not copy to artifact directory: {e}")
+else:
+    print("Warning: No valid sector statistics found.")
+
+# --- Save Crop-Level Plant Database (Conforming to target schema, excluding NOISE) ---
+print(f"Filtering out noise plants from the output...")
+df_crop = df[df['predicted_growth_stage_name'] != 'NOISE'].copy()
+
+# Rename columns to match target schema
+df_crop = df_crop.rename(columns={
+    'canopy_area_m2': 'canopy_area',
+    'predicted_growth_stage_name': 'predicted_growth_stage'
+})
+
+# Map health status to numeric code
+status_map = {
+    'Healthy': 0,
+    'Moderate': 1,
+    'Stressed': 2,
+    'Critical': 3,
+    'BoundaryLimit': 4
 }
+df_crop['health_status_code'] = df_crop['health_status'].map(status_map).fillna(4).astype(int)
 
-for col, val in placeholder_cols.items():
-    df[col] = val
+# Add remaining database columns as empty fields
+target_empty_cols = [
+    'flight_date', 'slope_degrees', 'drainage_accumulation', 'estimated_height',
+    'canopy_circularity', 'nearest_neighbor_dist_m', 'delta_canopy_area',
+    'delta_ndvi', 'delta_ndre', 'stagnation_flag', 'regression_flag'
+]
+for col in target_empty_cols:
+    df_crop[col] = np.nan
 
-print("\n=== Overall Health Status Distribution (Weeds/Noise Removed) ===")
-print(df['health_status'].value_counts())
+print("\n=== Overall Health Status Distribution (ML Score Engine) ===")
+print(df_crop['health_status'].value_counts())
 
-# Prune and organize columns according to the specified copy-pastable schema
+# Prune columns to essential ones for output
 columns_to_keep = [
     'plant_id',
     'sector_id',
@@ -243,13 +307,12 @@ columns_to_keep = [
     'predicted_growth_stage',
     'health_score',
     'health_status',
+    'health_status_code',
     'health_color',
     'osavi',
     'ndvi',
     'ndre',
     'flight_date',
-    'planted_at',
-    'elevation',
     'slope_degrees',
     'drainage_accumulation',
     'estimated_height',
@@ -261,9 +324,9 @@ columns_to_keep = [
     'stagnation_flag',
     'regression_flag'
 ]
-df = df[[col for col in columns_to_keep if col in df.columns]]
+df_crop = df_crop[[col for col in columns_to_keep if col in df_crop.columns]]
 
 # Save final output
-df.to_csv(output_csv_path, index=False)
+df_crop.to_csv(output_csv_path, index=False)
 print(f"\nFinal health database successfully saved to: {output_csv_path}")
 print("Step 3 finished successfully.\n")
