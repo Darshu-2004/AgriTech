@@ -118,3 +118,24 @@ python scripts/run_pipeline.py
 
 3. **`plants_health_map.html`** (Workspace Root)
    - An interactive Leaflet.js HTML map overlaying crop circles (color-coded by health status code) on top of the downsampled web orthomosaic background.
+
+---
+
+## 🔌 Integrability & Portability (Commercial Deployment)
+
+This pipeline is designed for enterprise scaling and can be adapted to new datasets or fields using the guidelines below:
+
+### 1. Map Raster Input Types (RGB vs. Raw Float)
+* **RGB Colorized Rasters (Current Default)**: In many drone post-processing exports, NDVI/NDRE maps are rendered as RGB heatmaps. The pipeline uses `scripts/colormaps.py` to reverse-map these visual pixels back to numerical scales.
+* **Raw Float Rasters**: If your drone software exports raw 32-bit floating-point GeoTIFFs (where pixel values are float index values from `-1.0` to `1.0`), you can disable the `colormaps.py` classification step and sample the values directly.
+
+### 2. Built-in Adaptations
+* **Projection Agnostic**: Spatial transformations are read dynamically from the GeoTIFF headers. The coordinates automatically adjust to any local UTM projection zone or coordinate system.
+* **Altitude Agnostic (GSD Scaling)**: Plant sizing is calculated in physical square meters using the Ground Sampling Distance (GSD) read dynamically from the TIFF tag `33550`. A flight flown at 40m or 80m will yield identical physical canopy area classifications.
+* **Cloud & Database Ready**: The script `scripts/db_exporter.py` loads database configurations via environment variables (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`), making it ready for serverless functions, Docker, or Kubernetes pipelines.
+
+### 📝 Checklist for New Fields/Flights
+To run this pipeline on a new field, you only need to provide:
+1. The **4 GeoTIFF Maps** (NDVI, NDRE, OSAVI, and RGB true-color orthomosaics).
+2. The **Crop Bounding Box CSV** (`plants_with_ids.csv` containing coordinates and box positions).
+3. The **Canopy PNG masks** folder containing individual crop leaf shapes.
