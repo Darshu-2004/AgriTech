@@ -15,7 +15,7 @@ csv_path = os.path.join(workspace_dir, 'plants_with_predictions_health.csv')
 ortho_path = os.path.join(workspace_dir, 'dataset1', 'ggs-orthophoto (2).tif')
 web_img_path = os.path.join(workspace_dir, 'orthomosaic_web.png')
 html_out_path = os.path.join(workspace_dir, 'plants_health_map.html')
-artifact_dir = r'C:\Users\dabbu\.gemini\antigravity\brain\9ee7a796-f500-422b-9f2c-cb0f2a00e38f'
+artifact_dir = os.getenv("AI_ARTIFACT_DIR", r'C:\Users\dabbu\.gemini\antigravity\brain\9ee7a796-f500-422b-9f2c-cb0f2a00e38f')
 
 MAX_DIM = 8000
 

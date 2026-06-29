@@ -250,7 +250,7 @@ if sector_stats:
     print(f"Sector-wise database successfully saved to: {sector_csv_path}")
     
     # Copy to artifact directory if it exists
-    artifact_dir = r'C:\Users\dabbu\.gemini\antigravity\brain\9ee7a796-f500-422b-9f2c-cb0f2a00e38f'
+    artifact_dir = os.getenv("AI_ARTIFACT_DIR", r'C:\Users\dabbu\.gemini\antigravity\brain\9ee7a796-f500-422b-9f2c-cb0f2a00e38f')
     if os.path.exists(artifact_dir):
         try:
             import shutil
