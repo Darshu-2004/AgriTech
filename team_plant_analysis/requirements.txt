@@ -3,3 +3,6 @@ pandas
 pillow
 scikit-learn
 psycopg2-binary
+scipy
+xgboost
+rasterio
