@@ -1,12 +1,10 @@
-# 🍍 Unsupervised Crop Health & Scoring Pipeline (Pillow + Multiprocessing Edition)
+# 🍍 Unsupervised Crop Health & Scoring Pipeline (Unified Team Edition)
 
-This pipeline is an enterprise-grade precision agriculture analytics system designed to ingest crop coordinates, extract georeferenced vegetation indices, predict growth stages, and calculate continuous crop health scores using unsupervised anomaly detection.
-
-By replacing C-dependent spatial libraries (`rasterio` and `tifffile`) with **Pillow (PIL)** and **NumPy**, this pipeline has **zero binary GDAL C++ dependencies**, making it extremely lightweight and easy to deploy in serverless environments, docker containers, or lightweight servers.
+This repository contains the enterprise-grade precision agriculture analytics system designed to ingest crop coordinates, extract georeferenced vegetation indices, predict growth stages, estimate vegetative biomass, and calculate continuous crop health scores using cohort-based anomaly detection.
 
 ---
 
-## 🗺️ Pipeline Flowchart (Phase 1)
+## 🗺️ Pipeline Flowchart
 
 ```text
                       RGB Orthomosaic
@@ -20,27 +18,24 @@ By replacing C-dependent spatial libraries (`rasterio` and `tifffile`) with **Pi
                                ▼
         ┌──────────────────────────────────────────────┐
         │        01_extract_indices.py (Step 1)        │
-        │  [Pillow-Based Multiprocessing Engine]       │
+        │  [Parallel Index Sampling Engine]            │
         │  • Split coordinates into CPU-core chunks     │
         │  • Execute parallel worker queries in RAM    │
         │                                              │
-        │  [Otsu's Adaptive Shadow Masking]            │
-        │  • Crop 10x10 RGB window dynamically         │
-        │  • Apply pure-numpy Otsu's thresholding      │
+        │  [OSAVI Soil-Gating & Shadow Masking]        │
+        │  • Map native coordinates using affine transforms│
+        │  • Filter out pixels with OSAVI < 0.2        │
         │  • Extract indices from sunlit leaves only   │
-        │                                              │
-        │  [Boundary Check]                            │
-        │  • Flag Out-of-Boundary crops as NaN         │
         └──────────────────────┬───────────────────────┘
                                │
                                ▼
-              plants_extracted_indices.csv
+               plants_extracted_indices.csv
                                │
                                ▼
         ┌──────────────────────────────────────────────┐
         │        train_growth_model.py (Step 1b)       │
         │  • Read GSD tags from GeoTIFF via PIL        │
-        │  • Convert area to physical canopy_area_m²   │
+        │  • Convert area to physical canopy_area (m²) │
         │  • Train RandomForestClassifier              │
         │  • Save: growth_stage_rf.pkl                 │
         └──────────────────────┬───────────────────────┘
@@ -48,40 +43,38 @@ By replacing C-dependent spatial libraries (`rasterio` and `tifffile`) with **Pi
                                ▼
         ┌──────────────────────────────────────────────┐
         │         03_classify_health.py (Step 3)       │
+        │  [XGBoost Index Gap-Imputer]                 │
+        │  • Fill out-of-boundary crops via k-NN ML    │
+        │                                              │
         │  [Stage-Aware Inference]                     │
         │  • Load RF model & predict physical stages   │
         │                                              │
         │  [KD-Tree Spatial Smoothing]                 │
         │  • Blend values with K=8 spatial neighbors   │
         │                                              │
-        │  [Dynamic Isolation Forest Anomaly]          │
-        │  • Fit IsolationForest per growth stage      │
-        │  • Score = Median - (1.5 * StdDev)           │
+        │  [Unsupervised Anomaly Detection]            │
+        │  • Fit IsolationForest per growth stage cohort│
         │                                              │
-        │  [Directional Outlier Vigor Capping]         │
-        │  • Outliers with high OSAVI -> Healthy       │
-        │  • Outliers with low OSAVI -> Unhealthy      │
+        │  [Biomass & Yield Estimates]                 │
+        │  • Calculate crop biomass (kg) & sector (t)   │
         │                                              │
         │  [Health Score Engine (0-100)]               │
-        │  • Score = f(NDRE%, OSAVI%, Stage-Area%)     │
-        │  • Enforce absolute biological floors        │
-        │                                              │
-        │  • 70–100 → Healthy    (#2E7D32)             │
-        │  • 40–70  → Moderate   (#FBC02D)             │
-        │  • 15–40  → Stressed   (#FF5722)             │
-        │  • 0–15   → Critical   (#D32F2F)             │
-        │  • NaN    → Out of Bnd (#1976D2)             │
+        │  • 70–100 → Healthy    (#2E7D32, Code 0)     │
+        │  • 40–70  → Moderate   (#FBC02D, Code 1)     │
+        │  • 15–40  → Stressed   (#FF5722, Code 2)     │
+        │  • 0–15   → Critical   (#D32F2F, Code 3)     │
         └──────────────────────┬───────────────────────┘
                                │
                                ▼
-                 plants_with_predictions_health.csv
+            plants_with_predictions_health.csv
+            sector_biomass_predictions.csv
                                │
                                ▼
         ┌──────────────────────────────────────────────┐
         │        02_generate_preview.py (Step 2)       │
-        │  • Generate plantation overlay preview       │
-        │  • Include 4-tier health legend              │
-        │  • Save: plants_health_map.png               │
+        │  • Generate plantation overlay Leaflet.js map│
+        │  • Include interactive popups & legends      │
+        │  • Save: plants_health_map.html              │
         └──────────────────────────────────────────────┘
 ```
 
@@ -89,41 +82,27 @@ By replacing C-dependent spatial libraries (`rasterio` and `tifffile`) with **Pi
 
 ## 🛠️ Requirements & Installation
 
-The pipeline runs on Python 3.8+ and does **not** require any binary GIS installations.
+The pipeline runs on Python 3.8+ and requires standard scientific Python libraries along with `rasterio` for coordinate parsing.
 
 To install the required Python packages, run:
 ```bash
-pip install numpy pandas pillow scikit-learn scipy matplotlib
+pip install numpy pandas pillow scikit-learn scipy xgboost rasterio psycopg2
 ```
 
 ---
 
 ## 🚀 How to Run the Code
 
-### Step 1: Place Input Files
-Make sure the following directory structure is set up:
-```text
-workspace_root/
-  ├─ dataset1/
-  │    ├─ Task-of-2026-03-22T063838646Z-orthophoto-OSAVI.tif
-  │    ├─ Task-of-2026-03-22T070712342Z-orthophoto-NDVI.tif
-  │    ├─ Task-of-2026-03-22T070712342Z-orthophoto-NDRE.tif
-  │    └─ ggs-orthophoto (2).tif
-  ├─ outputs/
-  │    └─ 03_ids/
-  │         └─ plants_with_ids.csv (contains crop coordinates & areas)
-  └─ pipeline/
-       ├─ 01_extract_indices.py
-       ├─ train_growth_model.py
-       ├─ 03_classify_health.py
-       ├─ 02_generate_preview.py
-       └─ run_pipeline.py
-```
+### Step 1: Ingest Inputs
+Make sure files are located inside:
+* `dataset1/`: GeoTIFFs (OSAVI, NDVI, NDRE, and true-color orthomosaic).
+* `outputs/03_ids/plants_with_ids.csv`: Crop boundary coordinates.
+* `outputs/04_masks/`: Individual binary png canopy masks.
 
-### Step 2: Execute the Master Orchestrator
-To run all stages of the pipeline sequentially (Extraction $\rightarrow$ Training $\rightarrow$ Health Assessment $\rightarrow$ Visual Preview), run:
+### Step 2: Execute Master Orchestrator
+To run all pipeline stages sequentially, run:
 ```bash
-python pipeline/run_pipeline.py
+python scripts/run_pipeline.py
 ```
 
 ---
@@ -131,13 +110,11 @@ python pipeline/run_pipeline.py
 ## 💾 Outputs Generated
 
 1. **`plants_with_predictions_health.csv`** (Workspace Root)
-   - The final processed crop health database containing **25 columns** including:
-     - `canopy_area_m2`: The GSD-scaled physical area.
-     - `predicted_growth_stage_name`: Growth stage predicted by Random Forest.
-     - `health_score`: Continuous health score ($0 - 100$).
-     - `health_status`: The 4-tier health tier (`Healthy`, `Moderate`, `Stressed`, `Critical`, `Out of Boundary`, `NOISE`).
-     - `health_color`: The hex code colors for database/GIS integration.
-     - `osavi_smoothed`: Spatially smoothed OSAVI.
+   - The final processed crop health database matching the PostGIS schema (noise crops filtered out).
+   - Columns: `plant_id`, `sector_id`, `sector_label`, `pixel_x`, `pixel_y`, `geo_x`, `geo_y`, `area_px`, `canopy_area`, `predicted_growth_stage`, `health_score`, `health_status`, `health_status_code`, `health_color`, `osavi`, `ndvi`, `ndre`, and empty telemetry placeholders.
 
-2. **`plants_health_map.png`** (Workspace Root)
-   - A high-resolution plantation health visualization map displaying all individual crops color-coded by their health tier overlayed on the downscaled RGB background orthophoto.
+2. **`sector_biomass_predictions.csv`** (Workspace Root)
+   - Aggregated 6-column database: `sector_id`, `sector_label`, `total_active_plants`, `predicted_biomass_tonnes`, `predicted_yield_tonnes` (blank), `market_grade` (blank).
+
+3. **`plants_health_map.html`** (Workspace Root)
+   - An interactive Leaflet.js HTML map overlaying crop circles (color-coded by health status code) on top of the downsampled web orthomosaic background.
